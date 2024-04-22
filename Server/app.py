@@ -72,11 +72,11 @@ def gas_info():
         "SO2": {"id": "COPERNICUS/S5P/NRTI/L3_SO2", "band": "SO2_column_number_density", "scale": 1e9, "unit": "µmol/m²"},
         "CO": {"id": "COPERNICUS/S5P/NRTI/L3_CO", "band": "CO_column_number_density", "scale": 1e9, "unit": "mol/m²"},
         "O3": {"id": "COPERNICUS/S5P/NRTI/L3_O3", "band": "O3_column_number_density", "scale": 1e9, "unit": "µmol/m²"},
-        "CH4": {"id": "COPERNICUS/S5P/OFFL/L3_CH4", "band": "CH4_column_volume_mixing_ratio_dry_air", "scale": 1, "unit": "ppb"},
-        "HCHO": {"id": "COPERNICUS/S5P/NRTI/L3_HCHO", "band": "tropospheric_HCHO_column_number_density", "scale": 1e9, "unit": "mol/m²"}
+        "CH4": {"id": "COPERNICUS/S5P/OFFL/L3_CH4", "band": "CH4_column_volume_mixing_ratio_dry_air", "scale": 1, "unit": "ppb"},  # Not included in AQI calculation
+        "HCHO": {"id": "COPERNICUS/S5P/NRTI/L3_HCHO", "band": "tropospheric_HCHO_column_number_density", "scale": 1e9, "unit": "mol/m²"}  # Not included in AQI calculation
     }
 
-    response_data = {}
+    response_data = {'concentrations': {}, 'aqi': {}}
     for gas, info in gases.items():
         collection = ee.ImageCollection(info["id"]) \
             .select(info["band"]) \
@@ -86,15 +86,23 @@ def gas_info():
         value = mean_img.reduceRegion(ee.Reducer.mean(), point, scale=1000).get(info["band"]).getInfo()
 
         if value is not None:
-            scaled_value = value * info["scale"]
-            if scaled_value < 0:
-                formatted_value = "Below Detection Limit"
-            else:
-                formatted_value = f"{scaled_value:.2e} {info['unit']}"  # Adjust formatting based on the scale
+            if gas in ['NO2', 'SO2', 'O3']:
+                ppb = umol_per_m2_to_ppb(value, gas)
+                response_data['concentrations'][gas] = f"{ppb:.2f} ppb"
+                response_data['aqi'][gas] = calculate_aqi(ppb, breakpoints[gas])
+            elif gas == 'CO':
+                ppm = mol_per_m2_to_ppm(value, gas)
+                response_data['concentrations'][gas] = f"{ppm:.2f} ppm"
+                response_data['aqi'][gas] = calculate_aqi(ppm, breakpoints[gas])
+            else:  # For CH4 and HCHO, just report the value without AQI calculation
+                response_data['concentrations'][gas] = f"{value:.2f} {info['unit']}"
         else:
-            formatted_value = "Data not available"
+            response_data['concentrations'][gas] = "Data not available"
+            response_data['aqi'][gas] = "Data not available"
 
-        response_data[gas] = formatted_value
+    # Determine the max AQI value
+    max_aqi_value = max((v for v in response_data['aqi'].values() if isinstance(v, (int, float))), default="Data not available")
+    response_data['aqi']['max_aqi'] = max_aqi_value
 
     return jsonify(response_data)
 
