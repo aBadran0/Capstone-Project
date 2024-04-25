@@ -55,4 +55,4 @@ function createChart(wText,wTimeSeriesData)
             },
           ],
         });
-      }
+      }jk
