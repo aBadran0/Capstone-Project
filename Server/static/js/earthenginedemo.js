@@ -198,149 +198,91 @@ function prepareChartData(rawData) {
     })
     .filter(item => !isNaN(item[0]) && !isNaN(item[1])); // filter out invalid data points
 }
+// Initialize the vector source and layer for markers
+var vectorSource = new ol.source.Vector({});
+var vectorLayer = new ol.layer.Vector({
+    source: vectorSource,
+    style: new ol.style.Style({
+        image: new ol.style.Icon({
+            anchor: [0.5, 1],
+            anchorXUnits: 'fraction',
+            anchorYUnits: 'pixels',
+            src: 'imgs/dot.svg' // Ensure this is a valid path to a marker image
+        })
+    })
+});
 
-
-// Initial chart creation (call this function to create the initial chart)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-/*
-function timeSeriesIndex() {
-  const theJson = {
-    gasSelection: $("#gasSelection").val(),
-    startDate: $("#fromDate").val(),
-    endDate: $("#toDate").val(),
-    scale: $("#scale").val(),
-  };
-
-  $.ajax({
-    url: api_url + 'timeSeriesIndex',
-    type: "POST",
-    async: true,
-    crossDomain: true,
-    contentType: "application/json",
-    data: JSON.stringify(theJson)
-  }).fail(function(jqXHR, textStatus, errorThrown) {
-    console.warn(jqXHR + textStatus + errorThrown);
-    $("#overlay").hide();
-  }).done(function(data, _textStatus, _jqXHR) {
-    if (data.errMsg) {
-      console.info(data.errMsg);
-    } else {
-      if (data.hasOwnProperty("timeseries")) {
-        createChart('timeSeriesIndex', data.timeseries);
-      } else {
-        console.warn("Wrong Data Returned");
-        console.log(data);
-      }
-    }
-    $("#overlay").hide()
-  });
-}
-
-
-// Function to update the chart based on date selection
-function updateChartByDate() {
-  const startDate = $("#startDate").val();
-  const endDate = $("#endDate").val();
-
-  if (startDate && endDate) {
-    const theJson = {
-      gasSelection: $("#gasSelection").val(),
-      startDate: startDate,
-      endDate: endDate,
-      scale: $("#scale").val(),
-    };
-
+// Function to load station markers from OpenAQ API and add them to the map
+function loadStationsAndMarkers() {
     $.ajax({
-      url: api_url + 'timeSeriesIndex',
-      type: "POST",
-      async: true,
-      crossDomain: true,
-      contentType: "application/json",
-      data: JSON.stringify(theJson)
-    }).fail(function(jqXHR, textStatus, errorThrown) {
-      console.warn(jqXHR + textStatus + errorThrown);
-      $("#overlay").hide();
-    }).done(function(data, _textStatus, _jqXHR) {
-      if (data.errMsg) {
-        console.info(data.errMsg);
-      } else {
-        if (data.hasOwnProperty("timeseries")) {
-          // Update the chart with the new data
-          updateChart('timeSeriesIndex', data.timeseries);
-        } else {
-          console.warn("Wrong Data Returned");
-          console.log(data);
+        url: "https://api.openaq.org/v1/locations?country=AE",
+        type: "GET",
+        success: function(response) {
+            response.results.forEach(station => {
+                addMarker(station.coordinates.latitude, station.coordinates.longitude, station.location);
+            });
+            // Add the vector layer to the map only after all markers are added
+            map.addLayer(vectorLayer);
+        },
+        error: function() {
+            console.error('Failed to fetch station data');
         }
-      }
-      $("#overlay").hide()
     });
-  }
 }
 
+// Function to add markers to the vector source
+function addMarker(lat, lon, title) {
+    var iconFeature = new ol.Feature({
+        geometry: new ol.geom.Point(ol.proj.fromLonLat([lon, lat])),
+        name: title
+    });
 
+    vectorSource.addFeature(iconFeature);
 
-
-
-
-
-
-
-function updateChart(chart, data) {
-  // Update the existing chart with new data
-  // Assuming you have a function to update the chart
-  updateChartData(chart, data);
+    // Add click event listener to the feature
+    iconFeature.on('singleclick', function(evt) {
+        fetchStationData(lat, lon, title);
+    });
 }
 
-==================================================================================
-*/
-  
-/*
-// this for the timeseries chart on the canvas 
-function getGasEmissions(lon, lat, startDate, endDate,gasType) {
-
-
-
-  const Sent5PNO2 = ee.ImageCollection("COPERNICUS/S5P/OFFL/L3_NO2")
-    .filterDate(startDate, endDate)
-    .select('NO2_column_number_density');
-
-  const point = ee.Geometry.Point(lon, lat);
-  const timeSeries = ee.ImageCollection(Sent5PNO2)
-    .filterBounds(point)
-    .map(function(image) {
-      return image.reduceRegion({
-        reducer: ee.Reducer.mean(),
-        geometry: point,
-        scale: 500,
-      });
-    }).flatten();
-
-  const emissions = timeSeries.aggregate_array('system:time_start').map(function(date) {
-    return [ee.Date(date).format('MM-yy'), timeSeries.filter(ee.Filter.dateRangeContains('system:time_start', date, date.advance(1, 'day'))).first().get('NO2_column_number_density')];
-  });
-
-  return emissions;
+// Function to fetch and display data from OpenAQ when a marker is clicked
+function fetchStationData(lat, lon, stationName) {
+    const url = `https://api.openaq.org/v1/latest?coordinates=${lat},${lon}&radius=1000`;
+    $.ajax({
+        url: url,
+        type: "GET",
+        success: function(response) {
+            if (response.results.length > 0) {
+                const measurements = response.results[0].measurements;
+                displayStationData(stationName, lat, lon, measurements);
+            }
+        },
+        error: function() {
+            console.error('Error fetching station data');
+        }
+    });
 }
-*/
+
+// Function to display data in the offcanvas
+function displayStationData(stationName, lat, lon, measurements) {
+    const gasInfoElement = document.getElementById('gasEmissionsInfo');
+    gasInfoElement.innerHTML = `<p><strong>Station:</strong> ${stationName}</p><p><strong>Latitude:</strong> ${lat.toFixed(3)}, <strong>Longitude:</strong> ${lon.toFixed(3)}</p>`;
+
+    measurements.forEach(m => {
+        gasInfoElement.innerHTML += `<p><strong>${m.parameter}:</strong> ${m.value} ${m.unit}</p>`;
+    });
+
+    new bootstrap.Offcanvas(document.getElementById('gasInfoOffcanvas')).show();
+}
+
+// Ensuring the stations and markers are loaded after the map is fully initialized
+document.addEventListener("DOMContentLoaded", function() {
+    loadStationsAndMarkers(); // Make sure this is called after the map is ready
+});
+
+
+
+
 
 
 
