@@ -1,3 +1,18 @@
+document.addEventListener("DOMContentLoaded", function() {
+    // Ensures the map is loaded before setting up interactions
+    function initializeMapInteractions() {
+        if (window.map && typeof window.map.on === 'function') {
+            setupMapInteractions();
+        } else {
+            // Wait for 500ms before trying again if map is not ready
+            setTimeout(initializeMapInteractions, 500);
+        }
+    }
+
+    initializeMapInteractions();
+});
+
+
 const AQI_BREAKPOINTS = {
     "o3": [[0, 0.054, 0, 50], [0.055, 0.070, 51, 100], [0.071, 0.085, 101, 150], [0.086, 0.105, 151, 200], [0.106, 0.200, 201, 300]],
     "no2": [[0, 53, 0, 50], [54, 100, 51, 100], [101, 360, 101, 150], [361, 649, 151, 200], [650, 1249, 201, 300], [1250, 2049, 301, 500]],
@@ -7,65 +22,31 @@ const AQI_BREAKPOINTS = {
     "pm10": [[0, 54, 0, 50], [55, 154, 51, 100], [155, 254, 101, 150], [255, 354, 151, 200], [355, 424, 201, 300], [425, 604, 300, 500]]
 };
 
-
 const MOLAR_MASSES = {
     "no2": 46.0055, // g/mol
     "so2": 64.066,  // g/mol
     "co": 28.01,    // g/mol
     "o3": 48.00,    // g/mol
-
 };
 
-// This function converts concentrations from µg/m³ to ppm or ppb
 function convertToAppropriateUnit(value, parameter) {
     const molarVolume = 24.45; // Molar Volume at 25°C and 1 atm in Liters
-    switch (parameter) {
-        case 'o3':
-        case 'co':
-            return (value * molarVolume) / (MOLAR_MASSES[parameter] * 1000);
-        case 'no2':
-        case 'so2':
-            return (value * molarVolume) / MOLAR_MASSES[parameter];
-        case 'pm25':
-        case 'pm10':
-            return value; // No conversion needed
-        default:
-            console.error(`No conversion factor specified for ${parameter}`);
-            return value; // Return original value if no conversion is available
-    }
+    return (parameter === 'pm25' || parameter === 'pm10') ? value : (value * molarVolume) / MOLAR_MASSES[parameter];
 }
 
 function calculateAQI(Cp, gas) {
-    if (!AQI_BREAKPOINTS.hasOwnProperty(gas)) {
-        console.error(`No AQI breakpoints defined for "${gas}".`);
-        return "AQI not available"; // Guard against incorrect gas keys
-    }
-    const breakpoints = AQI_BREAKPOINTS[gas];
-    console.log(`Breakpoints for ${gas}:`, breakpoints);  // Log the breakpoints to check their format
-
+    const breakpoints = AQI_BREAKPOINTS[gas] || [];
     for (let i = 0; i < breakpoints.length; i++) {
-        if (breakpoints[i].length !== 4) {
-            console.error(`Breakpoint format error for ${gas} at index ${i}:`, breakpoints[i]);
-            continue; // Skip malformed breakpoint entries
-        }
         const [C_low, C_high, AQI_low, AQI_high] = breakpoints[i];
         if (C_low <= Cp && Cp <= C_high) {
             return ((AQI_high - AQI_low) / (C_high - C_low)) * (Cp - C_low) + AQI_low;
         }
     }
-    return "AQI not available"; // Return when concentration is out of defined ranges
+    return "AQI not available";
 }
 
-
-
 document.addEventListener("DOMContentLoaded", function() {
-    window.onload = function() {
-        if (window.map) {
-            setupMapInteractions();
-        } else {
-            console.error("Map or OpenLayers library not properly initialized.");
-        }
-    };
+    setupMapInteractions();
 });
 
 let lastCalled = null;
@@ -83,6 +64,7 @@ function shouldFetch(lat, lon) {
 }
 
 function fetchGasInfo(lat, lon) {
+    if (!shouldFetch(lat, lon)) return;
     $.ajax({
         url: "/gas-info",
         type: "POST",
@@ -98,7 +80,6 @@ function fetchGasInfo(lat, lon) {
 }
 
 function displayGasInfo(data, lat, lon) {
-    if(!shouldFetch(lat, lon)) return;
     const gasInfoElement = document.getElementById('gasEmissionsInfo');
     gasInfoElement.innerHTML = `<p><strong>Latitude:</strong> ${lat.toFixed(3)}, <strong>Longitude:</strong> ${lon.toFixed(3)}</p>`;
     Object.keys(data).forEach(gas => {
@@ -126,7 +107,7 @@ function setupMapInteractions() {
 }
 
 function fetchOpenAQData(lat, lon) {
-    if(!shouldFetch(lat, lon)) return;
+    if (!shouldFetch(lat, lon)) return;
     lat = Number(lat).toFixed(8);
     lon = Number(lon).toFixed(8);
     const endDate = new Date();
@@ -150,18 +131,8 @@ function fetchOpenAQData(lat, lon) {
         }
     });
 }
-    document.getElementById('latitudeValue').textContent = lat.toFixed(3);
-    document.getElementById('longitudeValue').textContent = lon.toFixed(3);
-
-    document.getElementById('ch4Value').textContent = data['CH4'];
-    document.getElementById('coValue').textContent = data['CO'];
-    document.getElementById('hchoValue').textContent = data['HCHO'];
-    document.getElementById('no2Value').textContent = data['NO2'];
-    document.getElementById('o3Value').textContent = data['O3'];
-    document.getElementById('so2Value').textContent = data['SO2'];
 
 function processMeasurements(measurements) {
-    console.log('Received measurements:', measurements);
     let sums = {}, counts = {}, units = {};
     measurements.forEach(m => {
         const param = m.parameter.toLowerCase();
@@ -175,12 +146,8 @@ function processMeasurements(measurements) {
 
     for (let param in sums) {
         const average = sums[param] / counts[param];
-        // Convert average value to the appropriate unit before AQI calculation
-        console.log("Average:", average);
         const convertedAverage = convertToAppropriateUnit(average, param);
-        console.log("Converted Average: " ,convertedAverage);
         const aqi = calculateAQI(convertedAverage, param);
-        console.log("AQI ", aqi);
         averages[param] = { average, unit: units[param], aqi };
         if (aqi > maxAQI) {
             maxAQI = aqi;
@@ -200,3 +167,4 @@ function displayOpenAQData(averages, mostPollutingGas) {
     }
     new bootstrap.Offcanvas(document.getElementById('gasInfoOffcanvas')).show();
 }
+

@@ -1,6 +1,6 @@
 import json
 import os
-import traceback
+import logging
 
 import requests
 from celery import Celery
@@ -13,9 +13,25 @@ from ee_utils import *
 from flask import Flask, jsonify
 import ee
 from datetime import datetime, timedelta
+from logging.handlers import RotatingFileHandler
+from celery.utils.log import get_task_logger
+from celery.result import AsyncResult
 
 app = Flask(__name__)
+logger = get_task_logger(__name__)
+
 CORS(app)
+
+
+def setup_logging():
+    handler = RotatingFileHandler('app.log', maxBytes=10000, backupCount=1)
+    handler.setLevel(logging.INFO)
+    app.logger.addHandler(handler)
+    app.logger.setLevel(logging.INFO)
+
+
+setup_logging()
+app.logger.info('Logging setup complete')
 
 
 # Initialize Celery
@@ -81,12 +97,22 @@ def get_openaq_data():
     date_from = request.args.get('date_from')
     date_to = request.args.get('date_to')
     limit = request.args.get('limit', 10000)
+    task = process_openaq_data.delay(latitude, longitude, date_from, date_to, limit)
+    return jsonify({'status': 'Task queued', 'task_id': task.id}), 202
 
+@celery.task
+def process_openaq_data(latitude, longitude, date_from, date_to, limit):
     url = f"https://api.openaq.org/v2/measurements?coordinates={latitude},{longitude}&radius=1000&date_from={date_from}&date_to={date_to}&limit={limit}"
     headers = {"X-API-Key": "64b0bb7bcecc37a2b4bee22f281748852e3055e3062d0d6fde9fce62977ff12b"}
-
-    response = requests.get(url, headers=headers)
-    return jsonify(response.json())
+    try:
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            raise Exception(f"API error: {response.status_code} {response.text}")
+    except Exception as e:
+        logger.error(f'Error fetching data from OpenAQ: {str(e)}')
+        return {"error": str(e)}
 
 
 @app.route('/gas-info', methods=['POST'])
@@ -236,41 +262,35 @@ preset_scale = 30
 
 
 @app.route('/timeSeriesIndex', methods=['POST'])
-@celery.task
 def time_series_index():
+    request_json = request.get_json()
+    if request_json:
+        gas_selection = request_json.get('gas', None)
+        start_date = request_json.get('startDate', None)
+        end_date = request_json.get('endDate', None)
+        task = process_time_series_index.delay(gas_selection, start_date, end_date)
+        return jsonify({'status': 'Task queued', 'task_id': task.id}), 202
+    else:
+        return jsonify({'status': 'error', 'message': 'Invalid request payload'}), 400
+
+
+@celery.task(bind=True)
+def process_time_series_index(self, gas_selection, start_date, end_date):
     try:
-        raw_data = request.data  # This will capture raw bytes sent to the endpoint
-        print("Raw data received:", raw_data)
-
-        request_json = request.get_json()
-        print('Received JSON:', request_json)
-
-        if request_json:
-            gas_selection = request_json.get('gas', None)
-            start_date = request_json.get('startDate', None)
-            end_date = request_json.get('endDate', None)
-
-            # Get the collection name and index name based on the gas selection
-            gas_info = gas_mapping.get(gas_selection, None)
-
-            if gas_info and start_date and end_date:
-                values = get_time_series_by_collection_and_index(gas_info['collection_name'],
-                                                                 gas_info['index_name'],
-                                                                 preset_scale,
-                                                                 uae_boundaries,
-                                                                 start_date,
-                                                                 end_date,
-                                                                 preset_reducer)
-            else:
-                raise Exception("Missing required parameters")
-        else:
-            raise Exception("Invalid request payload")
+        # Assuming get_time_series_by_collection_and_index is properly defined elsewhere
+        values = get_time_series_by_collection_and_index(gas_selection, start_date, end_date)
+        return values
     except Exception as e:
-        values = {
-            'errMsg': str(e)
-        }
+        return {'errMsg': str(e)}
 
-    return jsonify(values), 200
+
+@app.route('/result/<task_id>')
+def get_result(task_id):
+    result = AsyncResult(task_id, app=celery)
+    if result.ready():
+        return jsonify(result.get()), 200
+    else:
+        return jsonify({'status': 'Processing'}), 202
 
 
 if __name__ == '__main__':
